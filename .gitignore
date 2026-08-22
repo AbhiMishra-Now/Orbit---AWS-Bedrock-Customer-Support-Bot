@@ -1,0 +1,25 @@
+# Environment & Sensitive Credentials
+.env
+.env.local
+agentcore_config.json
+
+# Generated Evaluation Datasets & Output Records
+output_eval_dataset.jsonl
+*.log
+*.tmp
+
+# Python Artifacts & Virtual Environments
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+env/
+venv/
+ENV/
+.pytest_cache/
+
+# IDE & OS Specific Files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
