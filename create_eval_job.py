@@ -31,7 +31,8 @@ def main():
     dataset_s3_uri = f"s3://{bucket_name}/output_eval_dataset.jsonl"
     output_s3_uri = f"s3://{bucket_name}/eval-results/"
 
-    job_name = "orbit-eval-job"
+    import time
+    job_name = f"orbit-eval-job-{int(time.time())}"
     job_description = "Bedrock Evaluation for Orbit Customer Support Chatbot"
 
     eval_config = {
