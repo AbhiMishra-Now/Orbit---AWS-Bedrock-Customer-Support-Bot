@@ -1,90 +1,103 @@
-#!/usr/bin/env python3
 import json
-import os
-import sys
 import uuid
 import boto3
 
 CONFIG_FILE = "agentcore_config.json"
 
-def main():
-    flow_id = None
-    flow_alias_id = None
-    node_name = "FlowInputNode"
+def load_config():
+    with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
 
-    if os.path.exists(CONFIG_FILE):
-        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-            config = json.load(f)
-            flow_id = config.get("flow_id")
-            flow_alias_id = config.get("flow_alias_id")
-            node_name = config.get("input_node_name", "FlowInputNode")
+def run_chat():
+    config = load_config()
+    region = config.get("region", "us-east-1")
+    agent_id = config.get("agent_id")
+    agent_alias_id = config.get("agent_alias_id", "TSTALIASID")
+    flow_id = config.get("flow_id", "WW0DY2THC8")
+    flow_alias_id = config.get("flow_alias_id", "TSTALIASID")
+    input_node_name = config.get("input_node_name", "FlowInputNode")
 
-    if not flow_id:
-        flow_id = input("Enter your Bedrock Flow ID: ").strip()
-    if not flow_alias_id:
-        flow_alias_id = input("Enter your Bedrock Flow Alias ID (or press Enter for default TSTALIASID): ").strip() or "TSTALIASID"
+    client = boto3.client("bedrock-agent-runtime", region_name=region)
+    session_id = f"session-{uuid.uuid4().hex[:12]}"
 
-    # Save to config for future runs
-    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-        json.dump({
-            "flow_id": flow_id,
-            "flow_alias_id": flow_alias_id,
-            "input_node_name": node_name,
-            "region": "us-east-1"
-        }, f, indent=2)
-
-    session = boto3.Session(region_name="us-east-1")
-    client = session.client("bedrock-agent-runtime")
-
-    print("\n=====================================================")
-    print("  Orbit Customer Support Chatbot (Bedrock Flow Client)")
-    print(f"  Flow ID: {flow_id} | Alias: {flow_alias_id}")
+    print("=====================================================")
+    print("  Orbit Customer Support Chatbot (AgentCore Client)")
+    print(f"  Session ID: {session_id}")
     print("  Type 'exit' or 'quit' to stop.")
     print("=====================================================\n")
 
     while True:
         try:
             user_input = input("You: ").strip()
-            if not user_input:
-                continue
-            if user_input.lower() in ("exit", "quit"):
-                print("Ending chat session. Goodbye!")
-                break
+        except (KeyboardInterrupt, EOFError):
+            break
 
-            resp = client.invoke_flow(
+        if not user_input:
+            continue
+        if user_input.lower() in ("exit", "quit"):
+            print("Ending session. Goodbye!")
+            break
+
+        print("\nOrbit: ", end="", flush=True)
+
+        if agent_id:
+            # AgentCore Harness invoke_agent
+            response = client.invoke_agent(
+                agentId=agent_id,
+                agentAliasId=agent_alias_id,
+                sessionId=session_id,
+                inputText=user_input,
+                enableTrace=True
+            )
+            
+            tool_called = False
+            for event in response.get("completion", []):
+                if "chunk" in event:
+                    text = event["chunk"].get("bytes", b"").decode("utf-8")
+                    print(text, end="", flush=True)
+                
+                if "trace" in event:
+                    trace_data = event["trace"].get("trace", {})
+                    orchestration = trace_data.get("orchestrationTrace", {})
+                    invocation_input = orchestration.get("invocationInput", {})
+                    
+                    ag_input = invocation_input.get("actionGroupInvocationInput", {})
+                    ag_name = ag_input.get("actionGroupName", "")
+                    fn_name = ag_input.get("function", "")
+                    
+                    if (ag_name == "bugreports" or fn_name == "create_bug_report") and not tool_called:
+                        print("\n[tool call] bugreports___create_bug_report")
+                        tool_called = True
+
+        else:
+            # Bedrock Runtime Flow Client
+            response = client.invoke_flow(
                 flowIdentifier=flow_id,
                 flowAliasIdentifier=flow_alias_id,
+                enableTrace=True,
                 inputs=[
                     {
-                        "nodeName": node_name,
+                        "nodeName": input_node_name,
                         "nodeOutputName": "document",
                         "content": {"document": user_input}
                     }
                 ]
             )
 
-            last_text = None
-            for event in resp.get("responseStream", []):
+            tool_called = False
+            for event in response.get("responseStream", []):
                 if "flowOutputEvent" in event:
-                    oe = event["flowOutputEvent"]
-                    last_text = oe.get("content", {}).get("document")
-                    break
-                elif "flowMultiTurnInputRequestEvent" in event:
-                    ce = event["flowMultiTurnInputRequestEvent"]
-                    last_text = ce.get("content", {}).get("document")
-                    break
+                    text = event["flowOutputEvent"].get("content", {}).get("document", "")
+                    print(text, end="", flush=True)
+                
+                if "flowTraceEvent" in event:
+                    trace_data = event["flowTraceEvent"].get("trace", {})
+                    node_name = str(trace_data.get("nodeName", ""))
+                    if ("Lambda" in node_name or "bugreports" in node_name) and not tool_called:
+                        print("\n[tool call] bugreports___create_bug_report")
+                        tool_called = True
 
-            if last_text:
-                print(f"Orbit: {last_text}\n")
-            else:
-                print("Orbit: (Response received)\n")
-
-        except KeyboardInterrupt:
-            print("\nExiting session...")
-            break
-        except Exception as e:
-            print(f"Error during chat invocation: {e}\n")
+        print("\n")
 
 if __name__ == "__main__":
-    main()
-
+    run_chat()

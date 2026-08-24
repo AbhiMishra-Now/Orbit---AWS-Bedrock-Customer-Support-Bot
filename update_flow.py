@@ -86,7 +86,7 @@ Customer Query:
 
     time.sleep(5)
 
-    print("\nSUCCESS! Flow updated with strict redirect rules.")
+    print("\nSUCCESS! Flow updated with strict turn-by-turn bug collection rules.")
 
 if __name__ == "__main__":
     main()
