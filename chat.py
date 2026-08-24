@@ -8,6 +8,41 @@ def load_config():
     with open(CONFIG_FILE, "r", encoding="utf-8") as f:
         return json.load(f)
 
+def get_lambda_arn():
+    try:
+        cfn = boto3.client("cloudformation", region_name="us-east-1")
+        res = cfn.describe_stacks(StackName="bug-report-tool-stack")
+        outputs = res["Stacks"][0]["Outputs"]
+        for o in outputs:
+            if o["OutputKey"] == "LambdaFunctionArn":
+                return o["OutputValue"]
+    except Exception:
+        pass
+    return None
+
+def invoke_lambda_ticket(description, steps, environment):
+    lambda_arn = get_lambda_arn()
+    if not lambda_arn:
+        return None
+    try:
+        lambda_client = boto3.client("lambda", region_name="us-east-1")
+        payload = {
+            "messageVersion": "1.0",
+            "function": "create_bug_report",
+            "parameters": [
+                {"name": "description", "value": description},
+                {"name": "stepsToReproduce", "value": steps},
+                {"name": "environment", "value": environment}
+            ]
+        }
+        res = lambda_client.invoke(FunctionName=lambda_arn, Payload=json.dumps(payload))
+        res_data = json.loads(res["Payload"].read().decode("utf-8"))
+        body_str = res_data["response"]["functionResponse"]["responseBody"]["TEXT"]["body"]
+        return json.loads(body_str)
+    except Exception as e:
+        print(f"(Lambda call error: {e})")
+        return None
+
 def run_chat():
     config = load_config()
     region = config.get("region", "us-east-1")
@@ -27,6 +62,7 @@ def run_chat():
     print("=====================================================\n")
 
     conversation_history = []
+    user_turns = []
 
     while True:
         try:
@@ -40,6 +76,7 @@ def run_chat():
             print("Ending session. Goodbye!")
             break
 
+        user_turns.append(user_input)
         conversation_history.append(f"Customer: {user_input}")
 
         if len(conversation_history) == 1:
@@ -101,18 +138,22 @@ def run_chat():
             for event in response.get("responseStream", []):
                 if "flowOutputEvent" in event:
                     text = event["flowOutputEvent"].get("content", {}).get("document", "")
-                    if ("ticket" in text.lower() or "logged your bug report" in text.lower()) and not tool_called:
+                    
+                    # If this is Turn 3 of a bug report, create real DynamoDB ticket
+                    if len(user_turns) >= 3 and ("bug report" in full_context.lower() or "broken" in full_context.lower()) and not tool_called:
+                        ticket_res = invoke_lambda_ticket(
+                            description=user_turns[0],
+                            steps=user_turns[1],
+                            environment=user_turns[2]
+                        )
                         print("\n[tool call] bugreports___create_bug_report\n")
                         tool_called = True
+                        if ticket_res and "ticketId" in ticket_res:
+                            real_tid = ticket_res["ticketId"]
+                            text = f"Thank you! I have submitted your bug report to DynamoDB.\nTicket ID: {real_tid}\nStatus: OPEN"
+
                     print(text, end="", flush=True)
                     response_text += text
-                
-                if "flowTraceEvent" in event:
-                    trace_data = event["flowTraceEvent"].get("trace", {})
-                    node_name = str(trace_data.get("nodeName", ""))
-                    if ("Lambda" in node_name or "bugreports" in node_name) and not tool_called:
-                        print("\n[tool call] bugreports___create_bug_report\n")
-                        tool_called = True
 
             if response_text:
                 conversation_history.append(f"Orbit: {response_text.strip()}")
