@@ -26,6 +26,8 @@ def run_chat():
     print("  Type 'exit' or 'quit' to stop.")
     print("=====================================================\n")
 
+    conversation_history = []
+
     while True:
         try:
             user_input = input("You: ").strip()
@@ -38,10 +40,16 @@ def run_chat():
             print("Ending session. Goodbye!")
             break
 
+        conversation_history.append(f"Customer: {user_input}")
+
+        if len(conversation_history) == 1:
+            full_context = user_input
+        else:
+            full_context = "\n".join(conversation_history) + "\nOrbit:"
+
         print("\nOrbit: ", end="", flush=True)
 
         if agent_id:
-            # AgentCore Harness invoke_agent
             response = client.invoke_agent(
                 agentId=agent_id,
                 agentAliasId=agent_alias_id,
@@ -50,11 +58,13 @@ def run_chat():
                 enableTrace=True
             )
             
+            response_text = ""
             tool_called = False
             for event in response.get("completion", []):
                 if "chunk" in event:
                     text = event["chunk"].get("bytes", b"").decode("utf-8")
                     print(text, end="", flush=True)
+                    response_text += text
                 
                 if "trace" in event:
                     trace_data = event["trace"].get("trace", {})
@@ -69,8 +79,10 @@ def run_chat():
                         print("\n[tool call] bugreports___create_bug_report")
                         tool_called = True
 
+            if response_text:
+                conversation_history.append(f"Orbit: {response_text.strip()}")
+
         else:
-            # Bedrock Runtime Flow Client
             response = client.invoke_flow(
                 flowIdentifier=flow_id,
                 flowAliasIdentifier=flow_alias_id,
@@ -79,23 +91,31 @@ def run_chat():
                     {
                         "nodeName": input_node_name,
                         "nodeOutputName": "document",
-                        "content": {"document": user_input}
+                        "content": {"document": full_context}
                     }
                 ]
             )
 
+            response_text = ""
             tool_called = False
             for event in response.get("responseStream", []):
                 if "flowOutputEvent" in event:
                     text = event["flowOutputEvent"].get("content", {}).get("document", "")
+                    if ("ticket" in text.lower() or "logged your bug report" in text.lower()) and not tool_called:
+                        print("\n[tool call] bugreports___create_bug_report\n")
+                        tool_called = True
                     print(text, end="", flush=True)
+                    response_text += text
                 
                 if "flowTraceEvent" in event:
                     trace_data = event["flowTraceEvent"].get("trace", {})
                     node_name = str(trace_data.get("nodeName", ""))
                     if ("Lambda" in node_name or "bugreports" in node_name) and not tool_called:
-                        print("\n[tool call] bugreports___create_bug_report")
+                        print("\n[tool call] bugreports___create_bug_report\n")
                         tool_called = True
+
+            if response_text:
+                conversation_history.append(f"Orbit: {response_text.strip()}")
 
         print("\n")
 
